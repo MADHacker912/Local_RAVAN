@@ -26,6 +26,11 @@ Integrated with **OpenRouter** for multi-model LLM reasoning (Claude 3.5 Sonnet,
 
 ## Key Features
 
+- **Dual Engine: Cloud API or 100% Local Uncensored LLM**:
+  - **Cloud AI API**: OpenRouter, OpenAI (ChatGPT), Anthropic Claude, Google Gemini, or any custom OpenAI-compatible endpoint with custom Base URL.
+  - **Local AirLLM Engine**: Runs uncensored open models locally on hardware with layer-by-layer memory offloading, allowing 8B models to run smoothly even on 8GB systems without out-of-memory errors.
+  - **System Specs Gate**: Automatically audits RAM, CPU cores, and GPU; refuses local execution if RAM <= 4GB to prevent system freezes.
+  - **Custom Model Directory**: Drop any `.gguf` or HuggingFace model directly into `models/` for immediate discovery.
 - **100% Autonomous Hands-Off Execution**: Zero confirmation loops. Once given an assessment objective, RAVAN executes tools, analyzes output, pivots based on discovered findings, and delivers final reports without asking permission.
 - **Deep Web Surfing & Business Logic Profiling**: Analyzes web targets to identify company business models (E-Commerce, FinTech, SaaS, Healthcare) and automatically tailors vulnerability discovery toward critical business logic vectors (e.g., cart tampering, BOLA/IDOR, payment bypasses, PostMessage wildcards).
 - **Automated Scope Extraction**: Parses bug bounty programs (HackerOne, Bugcrowd, private disclosure policies) to instantly extract in-scope wildcard domains (`*.target.com`), out-of-scope targets, APIs, and client-side technology stacks.
@@ -118,14 +123,39 @@ ravan
 
 ---
 
-## Configuration
+## Configuration & First-Time Setup Wizard
 
-On your first run, RAVAN prompts for your **OpenRouter API Key** and securely saves it to `~/.hex_agent.env`. You can also configure this file manually:
+On your first run (or anytime by executing `/setup`), RAVAN launches an interactive Setup Wizard:
+
+1. **Option [1] Cloud AI API**:
+   - **OpenRouter** (Default / Recommended — Claude 3.5 Sonnet, DeepSeek, GPT-4o, Llama 3)
+   - **OpenAI** (ChatGPT / GPT-4o / o1)
+   - **Anthropic Claude** (Claude API / Compatible)
+   - **Google Gemini** (OpenAI-compatible endpoint)
+   - **Custom / Other Provider** (Custom Base URL + API Key for Ollama, vLLM, Groq, Mistral)
+
+2. **Option [2] Local Uncensored LLM**:
+   - Performs a hardware audit (RAM, CPU cores, CUDA).
+   - If Total RAM <= 4GB: Local execution is blocked to prevent OOM; prompts to use Cloud API.
+   - If Total RAM > 4GB: Curates 3 top uncensored cyber models:
+     - `Dolphin 2.9 Llama-3 8B` (Abliterated / Offensive Security) ~4.5 GB
+     - `Qwen 2.5 Coder 7B` (Abliterated / Exploit & Script Auditing) ~4.4 GB
+     - `Llama 3.2 3B Instruct` (Uncensored / Fast Lightweight) ~2.0 GB
+   - Prompts for download confirmation, downloads into `models/` with progress tracking.
+   - Users can drop custom models into `models/` for auto-discovery.
+   - Powered by **AirLLM** for memory-efficient layer-by-layer offloading.
+
+Settings are saved in `~/.hex_agent.env`:
 
 ```env
-OPENROUTER_API_KEY="sk-or-v1-xxxxxxxxxxxxxxxx"
-OPENROUTER_BASE_URL="https://openrouter.ai/api/v1"
+PROVIDER_TYPE="api" # "api" or "local"
+API_PROVIDER="openrouter" # openrouter, openai, claude, gemini, custom
+API_KEY="sk-or-v1-xxxxxxxx"
+API_BASE_URL="https://openrouter.ai/api/v1"
 DEFAULT_MODEL="anthropic/claude-3.5-sonnet"
+LOCAL_MODEL_NAME=""
+LOCAL_MODEL_PATH=""
+LOCAL_BACKEND="airllm"
 HEXSTRIKE_SERVER="http://127.0.0.1:8888"
 DEFAULT_MODE="bugbounty"
 ```

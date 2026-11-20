@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ravan autonomous cybersecurity ai agent
-# openrouter aur hexstrike mcp 150+ tools ke sath connect karke security testing karta hai
+# openrouter, openai, claude, gemini, custom apis aur local uncensored airllm models ko support karta hai
 # bina kisi permission ke sare security tools autonomous tareeqe se execute karta hai
 
 import sys
@@ -25,6 +25,8 @@ from rich.columns import Columns
 from openai import OpenAI
 from config import load_config, save_config
 from tools_manager import HexStrikeToolsManager
+from setup_wizard import run_setup_wizard, get_system_specs, scan_local_models
+from local_llm_engine import LocalLLMClient
 
 # terminal output aur styling ke liye rich console ka object setup kar rahe hain
 console = Console()
@@ -49,10 +51,10 @@ BANNER = """[bold red]
 ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝
 [/bold red]
 [bold red]RAVAN // AUTONOMOUS CYBERSECURITY AI PARTNER[/bold red]
-[dim green]10-Headed Offensive Intelligence | OpenRouter x HexStrike MCP (150+ Tools)[/dim green]
+[dim green]10-Headed Offensive Intelligence | Multi-API x Local AirLLM x HexStrike MCP[/dim green]
 """
 
-# openrouter model ke liye ravan ka main offensive security system prompt
+# openrouter aur local model ke liye ravan ka main offensive security system prompt
 SYSTEM_PROMPT = """You are RAVAN, an elite Autonomous White-Hat Cybersecurity AI Partner and Offensive Security Specialist. You operate directly within a terminal workstation integrated with Web Surfing, OSINT Search, and 150+ HexStrike automated security tools via FastMCP.
 
 Communication Style & Operating Philosophy:
@@ -147,30 +149,35 @@ MODEL_ALIASES = {
     "gemini": "google/gemini-2.0-flash-exp:free"
 }
 
-# model ka alias dhoondh kar uska full openrouter id wapas karta hai
+# model ka alias dhoondh kar uska full id wapas karta hai
 def resolve_model(name: str) -> str:
     name_clean = name.strip()
     return MODEL_ALIASES.get(name_clean.lower(), name_clean)
 
 # security audit reports save karne ka target directory
 REPORTS_DIR = Path("/home/obito/hex-cyber-agent/reports")
+MODELS_DIR = Path("/home/obito/hex-cyber-agent/models")
 
 # terminal par ravan ka main ascii banner print karta hai
 def print_banner():
     console.print(BANNER)
 
 # terminal screen par live system status aur configuration dashboard dikhata hai
-def display_dashboard(model: str, mode: str, tools_count: int, server_url: str):
-    grid = Table.grid(expand=True)
-    grid.add_column(justify="left")
-    grid.add_column(justify="right")
+def display_dashboard(model: str, mode: str, tools_count: int, server_url: str, config: dict):
+    provider_type = config.get("PROVIDER_TYPE", "api")
+    if provider_type == "local":
+        provider_badge = f"[bold magenta]LOCAL AIRLLM ({config.get('LOCAL_BACKEND', 'airllm').upper()})[/bold magenta]"
+    else:
+        provider_name = config.get("API_PROVIDER", "openrouter").upper()
+        provider_badge = f"[bold cyan]CLOUD API ({provider_name})[/bold cyan]"
 
     info_table = Table(box=None, show_header=False, padding=(0, 2))
-    info_table.add_row("[bold cyan]AI Engine:[/bold cyan]", f"[bold yellow]{model}[/bold yellow]")
+    info_table.add_row("[bold cyan]Provider Mode:[/bold cyan]", provider_badge)
+    info_table.add_row("[bold cyan]AI Engine / Model:[/bold cyan]", f"[bold yellow]{model}[/bold yellow]")
     info_table.add_row("[bold cyan]Operation Mode:[/bold cyan]", f"[bold magenta]{mode.upper()}[/bold magenta]")
     info_table.add_row("[bold cyan]HexStrike MCP:[/bold cyan]", f"[bold green]{tools_count} Tools Loaded[/bold green] ({server_url})")
     info_table.add_row("[bold cyan]Reports Directory:[/bold cyan]", f"[dim]{REPORTS_DIR}[/dim]")
-    info_table.add_row("[bold cyan]Quick Commands:[/bold cyan]", "[dim]/mode <name> | /model <id> | /tools | /clear | /exit[/dim]")
+    info_table.add_row("[bold cyan]Quick Commands:[/bold cyan]", "[dim]/setup | /mode <name> | /model <id> | /tools | /clear | /exit[/dim]")
 
     panel = Panel(
         info_table,
@@ -181,28 +188,45 @@ def display_dashboard(model: str, mode: str, tools_count: int, server_url: str):
     console.print(panel)
     console.print("\n[dim]Enter any target or operational objective (e.g. 'Audit https://target.com') — RAVAN will handle everything autonomously.[/dim]\n")
 
-# openrouter client ko setup aur initialize karta hai agar api key na ho toh user se maangta hai
-def setup_client(config: dict) -> Tuple[OpenAI, str]:
-    api_key = config.get("OPENROUTER_API_KEY", "")
-    if not api_key:
-        console.print("[yellow][!] OpenRouter API Key not found![/yellow]")
-        api_key = console.input("[bold cyan]Enter your OpenRouter API Key (sk-or-v1-...): [/bold cyan]").strip()
-        if not api_key:
-            console.print("[bold red][x] API Key is required. Exiting.[/bold red]")
-            sys.exit(1)
-        config["OPENROUTER_API_KEY"] = api_key
-        save_config(config)
-        console.print("[green][+] API Key successfully saved in ~/.hex_agent.env[/green]\n")
+# client setup karta hai cloud api ya local llm engine ke mutabiq
+def setup_client(config: dict) -> Tuple[Any, str]:
+    provider_type = config.get("PROVIDER_TYPE", "api")
+
+    # agar user ne local llm configure kiya hai
+    if provider_type == "local":
+        model_path = config.get("LOCAL_MODEL_PATH", "")
+        model_name = config.get("LOCAL_MODEL_NAME", "Local Uncensored LLM")
+        backend = config.get("LOCAL_BACKEND", "airllm")
+
+        if not model_path or not Path(model_path).exists():
+            console.print(f"[yellow][!] Local model directory not found at: {model_path}[/yellow]")
+            console.print("[dim]Launching Setup Wizard to select or download a model...[/dim]\n")
+            config = run_setup_wizard(force=True)
+            return setup_client(config)
+
+        client = LocalLLMClient(model_path=model_path, backend=backend)
+        return client, model_name
+
+    # cloud api configure kar rahe hain
+    api_key = config.get("API_KEY") or config.get("OPENROUTER_API_KEY", "")
+    provider = config.get("API_PROVIDER", "openrouter")
+    base_url = config.get("API_BASE_URL") or config.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    default_model = config.get("DEFAULT_MODEL", "anthropic/claude-3.5-sonnet")
+
+    if not api_key and provider != "custom":
+        console.print(f"[yellow][!] API Key not found for {provider.upper()}![/yellow]")
+        config = run_setup_wizard(force=True)
+        return setup_client(config)
 
     client = OpenAI(
-        base_url=config.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-        api_key=api_key,
+        base_url=base_url,
+        api_key=api_key or "sk-dummy-key",
         default_headers={
             "HTTP-Referer": "https://github.com/hexstrike-ai",
             "X-Title": "RAVAN Cyber AI Agent"
         }
     )
-    return client, resolve_model(config.get("DEFAULT_MODEL", "anthropic/claude-3.5-sonnet"))
+    return client, resolve_model(default_model)
 
 # hackerone report standard ke hisab se final markdown file generate aur save karta hai
 def save_markdown_report(prompt: str, model: str, mode: str, tools: List[Dict[str, Any]], content: str, duration: float) -> str:
@@ -293,8 +317,12 @@ def display_tools_list(tools_mgr: HexStrikeToolsManager, mode: str):
 def main():
     print_banner()
     config = load_config()
+
+    # pehli baar launch hone par ya bina config ke setup wizard check
+    if not config.get("API_KEY") and not config.get("OPENROUTER_API_KEY") and not config.get("LOCAL_MODEL_PATH"):
+        config = run_setup_wizard(force=True)
+
     client, current_model = setup_client(config)
-    
     current_mode = config.get("DEFAULT_MODE", "bugbounty")
     server_url = config.get("HEXSTRIKE_SERVER", "http://127.0.0.1:8888")
     
@@ -303,7 +331,7 @@ def main():
         tools_mgr = HexStrikeToolsManager(server_url)
     
     total_tools = len(tools_mgr.get_tool_names()) if tools_mgr.available else 0
-    display_dashboard(current_model, current_mode, total_tools, server_url)
+    display_dashboard(current_model, current_mode, total_tools, server_url, config)
 
     # conversation messages ki list initialize kar rahe hain
     messages: List[Dict[str, Any]] = [
@@ -313,7 +341,8 @@ def main():
     while True:
         try:
             # terminal par custom cyber input prompt dikha rahe hain
-            console.print(f"[bold red]╭─[[/bold red] [bold white]RAVAN[/bold white] [dim]|[/dim] [cyan]{current_model}[/cyan] [dim]|[/dim] [magenta]{current_mode.upper()}[/magenta] [bold red]][/bold red]")
+            p_type = config.get("PROVIDER_TYPE", "api").upper()
+            console.print(f"[bold red]╭─[[/bold red] [bold white]RAVAN[/bold white] [dim]|[/dim] [cyan]{current_model}[/cyan] [dim]|[/dim] [magenta]{current_mode.upper()}[/magenta] [dim]|[/dim] [green]{p_type}[/green] [bold red]][/bold red]")
             user_input = console.input("[bold red]╰─❯ [/bold red]").strip()
             if not user_input:
                 continue
@@ -330,6 +359,11 @@ def main():
                     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
                     console.print("[bold green][+] Chat context cleared![/bold green]\n")
                     continue
+                elif cmd == "/setup":
+                    config = run_setup_wizard(force=True)
+                    client, current_model = setup_client(config)
+                    display_dashboard(current_model, current_mode, total_tools, server_url, config)
+                    continue
                 elif cmd == "/mode":
                     if len(cmd_parts) > 1 and cmd_parts[1].lower() in ["bugbounty", "malware", "all", "essential"]:
                         current_mode = cmd_parts[1].lower()
@@ -341,33 +375,44 @@ def main():
                     continue
                 elif cmd == "/model":
                     if len(cmd_parts) > 1:
-                        current_model = resolve_model(cmd_parts[1].strip())
-                        config["DEFAULT_MODEL"] = current_model
+                        if config.get("PROVIDER_TYPE") == "local":
+                            config["LOCAL_MODEL_NAME"] = cmd_parts[1].strip()
+                            current_model = config["LOCAL_MODEL_NAME"]
+                        else:
+                            current_model = resolve_model(cmd_parts[1].strip())
+                            config["DEFAULT_MODEL"] = current_model
                         save_config(config)
                         console.print(f"[bold green][+] Model switched to: {current_model}[/bold green]\n")
                     else:
-                        console.print(f"[cyan]Current model: {current_model}[/cyan]\n[dim]Usage: /model <model_id> (e.g. deepseek, claude, gpt-4o, llama)[/dim]\n")
+                        if config.get("PROVIDER_TYPE") == "local":
+                            existing = scan_local_models()
+                            console.print(f"[cyan]Current Local Model: {current_model}[/cyan]")
+                            console.print(f"[dim]Available in {MODELS_DIR}: {[m['name'] for m in existing]}[/dim]\n")
+                        else:
+                            console.print(f"[cyan]Current model: {current_model}[/cyan]\n[dim]Usage: /model <model_id> (e.g. deepseek, claude, gpt-4o, llama)[/dim]\n")
                     continue
                 elif cmd == "/tools":
                     display_tools_list(tools_mgr, current_mode)
                     continue
                 elif cmd == "/key":
-                    new_key = console.input("[bold cyan]Enter new OpenRouter API Key: [/bold cyan]").strip()
+                    new_key = console.input("[bold cyan]Enter new API Key: [/bold cyan]").strip()
                     if new_key:
+                        config["API_KEY"] = new_key
                         config["OPENROUTER_API_KEY"] = new_key
                         save_config(config)
                         client, current_model = setup_client(config)
-                        console.print("[bold green][+] OpenRouter API Key updated![/bold green]\n")
+                        console.print("[bold green][+] API Key updated![/bold green]\n")
                     continue
                 elif cmd in ["/help", "/?"]:
                     help_table = Table(title="RAVAN Slash Commands", border_style="red")
                     help_table.add_column("Command", style="bold cyan")
                     help_table.add_column("Description", style="dim white")
+                    help_table.add_row("/setup", "Run setup wizard (Cloud API vs Local Uncensored LLM)")
                     help_table.add_row("/mode <name>", "Switch tool profile: bugbounty, malware, all, essential")
-                    help_table.add_row("/model <id>", "Switch OpenRouter LLM model dynamically")
+                    help_table.add_row("/model <id>", "Switch LLM model dynamically")
                     help_table.add_row("/tools", "List active HexStrike MCP tools")
                     help_table.add_row("/clear", "Reset conversation context")
-                    help_table.add_row("/key", "Change or update OpenRouter API Key")
+                    help_table.add_row("/key", "Change or update API Key")
                     help_table.add_row("/exit", "Exit RAVAN agent")
                     console.print(help_table)
                     continue
@@ -383,7 +428,7 @@ def main():
             # select kiye gaye mode ke mutabiq active tools load kar rahe hain
             active_tools = tools_mgr.get_openai_tools(mode=current_mode) if tools_mgr.available else None
 
-            # openrouter api aur autonomous tool execution ka main loop
+            # openrouter ya local llm engine aur autonomous tool execution ka main loop
             while True:
                 with console.status(f"[bold cyan][*] RAVAN is analyzing with {current_model}...[/bold cyan]", spinner="dots"):
                     try:
@@ -397,7 +442,7 @@ def main():
 
                         response = client.chat.completions.create(**kwargs)
                     except Exception as err:
-                        console.print(f"[bold red][x] OpenRouter API Error: {str(err)}[/bold red]")
+                        console.print(f"[bold red][x] AI Engine Error: {str(err)}[/bold red]")
                         break
 
                 choice = response.choices[0]
@@ -411,7 +456,7 @@ def main():
                     for tool_call in msg.tool_calls:
                         func_name = tool_call.function.name
                         try:
-                            func_args = json.loads(tool_call.function.arguments)
+                            func_args = json.loads(tool_call.function.arguments) if isinstance(tool_call.function.arguments, str) else tool_call.function.arguments
                         except Exception:
                             func_args = {}
 

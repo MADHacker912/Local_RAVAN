@@ -4,5 +4,7 @@ __pycache__/
 .venv/
 reports/*.md
 !reports/.gitkeep
+models/*
+!models/.gitkeep
 *.log
 web_showcase/
