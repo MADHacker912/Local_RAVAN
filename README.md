@@ -178,10 +178,11 @@ Control operational modes and models directly from the interactive prompt:
 
 | Command | Description |
 |---|---|
+| `/setup` | Launch setup wizard to switch between Cloud APIs and Local Uncensored AirLLM |
 | `/mode <name>` | Switch active toolset profile (`bugbounty`, `malware`, `essential`, `all`) |
-| `/model <id>` | Switch OpenRouter LLM backend dynamically |
+| `/model [id\|local]` | Interactive model switcher, setup local AirLLM, or switch cloud model dynamically |
 | `/tools` | List all active HexStrike MCP tools loaded in the current mode |
-| `/key` | Update or change OpenRouter API Key |
+| `/key` | Update or change API Key |
 | `/clear` | Clear the current conversation context |
 | `/help` | Display command help sheet |
 | `/exit` | Exit RAVAN agent |

@@ -25,7 +25,7 @@ from rich.columns import Columns
 from openai import OpenAI
 from config import load_config, save_config
 from tools_manager import HexStrikeToolsManager
-from setup_wizard import run_setup_wizard, get_system_specs, scan_local_models
+from setup_wizard import run_setup_wizard, get_system_specs, scan_local_models, setup_local_llm, setup_api_provider
 from local_llm_engine import LocalLLMClient
 
 # terminal output aur styling ke liye rich console ka object setup kar rahe hain
@@ -177,7 +177,7 @@ def display_dashboard(model: str, mode: str, tools_count: int, server_url: str, 
     info_table.add_row("[bold cyan]Operation Mode:[/bold cyan]", f"[bold magenta]{mode.upper()}[/bold magenta]")
     info_table.add_row("[bold cyan]HexStrike MCP:[/bold cyan]", f"[bold green]{tools_count} Tools Loaded[/bold green] ({server_url})")
     info_table.add_row("[bold cyan]Reports Directory:[/bold cyan]", f"[dim]{REPORTS_DIR}[/dim]")
-    info_table.add_row("[bold cyan]Quick Commands:[/bold cyan]", "[dim]/setup | /mode <name> | /model <id> | /tools | /clear | /exit[/dim]")
+    info_table.add_row("[bold cyan]Quick Commands:[/bold cyan]", "[dim]/setup | /mode <name> | /model <id|local> | /tools | /clear | /exit[/dim]")
 
     panel = Panel(
         info_table,
@@ -374,22 +374,102 @@ def main():
                         console.print("[yellow]Usage: /mode <bugbounty | malware | all | essential>[/yellow]\n")
                     continue
                 elif cmd == "/model":
-                    if len(cmd_parts) > 1:
-                        if config.get("PROVIDER_TYPE") == "local":
-                            config["LOCAL_MODEL_NAME"] = cmd_parts[1].strip()
-                            current_model = config["LOCAL_MODEL_NAME"]
-                        else:
-                            current_model = resolve_model(cmd_parts[1].strip())
-                            config["DEFAULT_MODEL"] = current_model
+                    # target argument check kar rahe hain jaise /model local ya /model <name>
+                    target_arg = cmd_parts[1].strip() if len(cmd_parts) > 1 else ""
+
+                    if target_arg.lower() in ["local", "setup", "local-setup", "airllm"]:
+                        # user directly local llm setup wizard open karna chahta hai
+                        console.print("\n[bold red][+] Launching Local Uncensored LLM Setup...[/bold red]")
+                        config = setup_local_llm(config, get_system_specs())
+                        client, current_model = setup_client(config)
                         save_config(config)
-                        console.print(f"[bold green][+] Model switched to: {current_model}[/bold green]\n")
-                    else:
-                        if config.get("PROVIDER_TYPE") == "local":
-                            existing = scan_local_models()
-                            console.print(f"[cyan]Current Local Model: {current_model}[/cyan]")
-                            console.print(f"[dim]Available in {MODELS_DIR}: {[m['name'] for m in existing]}[/dim]\n")
+                        console.print(f"[bold green][+] Switched to Local Model: {current_model}[/bold green]\n")
+                    elif target_arg.lower() in ["api", "cloud", "cloud-api"]:
+                        # user directly cloud api provider configure karna chahta hai
+                        console.print("\n[bold cyan][+] Launching Cloud API Setup...[/bold cyan]")
+                        config = setup_api_provider(config)
+                        client, current_model = setup_client(config)
+                        save_config(config)
+                        console.print(f"[bold green][+] Switched to Cloud API Model: {current_model}[/bold green]\n")
+                    elif target_arg:
+                        # check kar rahe hain kya target argument local models folder me maujood hai
+                        existing = scan_local_models()
+                        matched_local = None
+                        for lm in existing:
+                            if target_arg.lower() == lm["name"].lower() or target_arg.lower() in lm["path"].lower():
+                                matched_local = lm
+                                break
+
+                        if matched_local:
+                            config["PROVIDER_TYPE"] = "local"
+                            config["LOCAL_MODEL_NAME"] = matched_local["name"]
+                            config["LOCAL_MODEL_PATH"] = matched_local["path"]
+                            save_config(config)
+                            client, current_model = setup_client(config)
+                            console.print(f"[bold green][+] Switched to Local Model: {current_model}[/bold green]\n")
                         else:
-                            console.print(f"[cyan]Current model: {current_model}[/cyan]\n[dim]Usage: /model <model_id> (e.g. deepseek, claude, gpt-4o, llama)[/dim]\n")
+                            # cloud model id ya alias select kar rahe hain
+                            config["PROVIDER_TYPE"] = "api"
+                            current_model = resolve_model(target_arg)
+                            config["DEFAULT_MODEL"] = current_model
+                            save_config(config)
+                            client, current_model = setup_client(config)
+                            console.print(f"[bold green][+] Switched to Cloud Model: {current_model}[/bold green]\n")
+                    else:
+                        # interactive menu jab user bina kisi argument ke /model run kare
+                        provider_type = config.get("PROVIDER_TYPE", "api")
+                        existing = scan_local_models()
+
+                        console.print("\n" + "=" * 55)
+                        console.print(f"[bold cyan]Current Engine:[/bold cyan] [bold yellow]{provider_type.upper()}[/bold yellow] | [bold cyan]Active Model:[/bold cyan] [bold yellow]{current_model}[/bold yellow]")
+                        console.print("[dim]Select an option to switch or configure models:[/dim]\n")
+                        console.print("[bold yellow][1][/bold yellow] Switch Cloud Model [dim](deepseek, claude, gpt-4o, llama, gemini, etc.)[/dim]")
+                        console.print("[bold yellow][2][/bold yellow] Setup / Download Local Uncensored LLM [dim](AirLLM Engine)[/dim]")
+                        if existing:
+                            console.print(f"[bold yellow][3][/bold yellow] Pick from Installed Local Models [dim]({len(existing)} found in models/)[/dim]")
+                            console.print("[bold yellow][4][/bold yellow] Reconfigure Cloud API Provider & Key")
+                        else:
+                            console.print("[bold yellow][3][/bold yellow] Reconfigure Cloud API Provider & Key")
+                        console.print("[dim][Press Enter to keep current setting][/dim]\n")
+
+                        choice = console.input("[bold cyan]Choose option: [/bold cyan]").strip()
+                        if choice == "1":
+                            m_input = console.input("[bold cyan]Enter Cloud Model name/alias (e.g. deepseek, claude, gpt-4o, llama): [/bold cyan]").strip()
+                            if m_input:
+                                config["PROVIDER_TYPE"] = "api"
+                                current_model = resolve_model(m_input)
+                                config["DEFAULT_MODEL"] = current_model
+                                save_config(config)
+                                client, current_model = setup_client(config)
+                                console.print(f"[bold green][+] Model switched to Cloud: {current_model}[/bold green]\n")
+                        elif choice == "2":
+                            console.print("\n[bold red][+] Starting Local LLM Hardware Audit & Setup...[/bold red]")
+                            config = setup_local_llm(config, get_system_specs())
+                            client, current_model = setup_client(config)
+                            save_config(config)
+                            console.print(f"[bold green][+] Engine switched to Local Model: {current_model}[/bold green]\n")
+                        elif choice == "3" and existing:
+                            console.print("\n[bold cyan]Installed Local Models in models/:[/bold cyan]")
+                            for i, lm in enumerate(existing, 1):
+                                console.print(f"  [[bold yellow]{i}[/bold yellow]] {lm['name']} [dim]({lm['path']})[/dim]")
+                            pick = console.input(f"[bold cyan]Select model [1-{len(existing)}]: [/bold cyan]").strip()
+                            try:
+                                pick_idx = int(pick) - 1
+                                if 0 <= pick_idx < len(existing):
+                                    sel_m = existing[pick_idx]
+                                    config["PROVIDER_TYPE"] = "local"
+                                    config["LOCAL_MODEL_NAME"] = sel_m["name"]
+                                    config["LOCAL_MODEL_PATH"] = sel_m["path"]
+                                    save_config(config)
+                                    client, current_model = setup_client(config)
+                                    console.print(f"[bold green][+] Switched to Local Model: {current_model}[/bold green]\n")
+                            except ValueError:
+                                console.print("[yellow]Invalid selection. Keeping current model.[/yellow]\n")
+                        elif (choice == "3" and not existing) or (choice == "4" and existing):
+                            config = setup_api_provider(config)
+                            client, current_model = setup_client(config)
+                            save_config(config)
+                            console.print(f"[bold green][+] API Provider reconfigured: {current_model}[/bold green]\n")
                     continue
                 elif cmd == "/tools":
                     display_tools_list(tools_mgr, current_mode)
@@ -409,7 +489,7 @@ def main():
                     help_table.add_column("Description", style="dim white")
                     help_table.add_row("/setup", "Run setup wizard (Cloud API vs Local Uncensored LLM)")
                     help_table.add_row("/mode <name>", "Switch tool profile: bugbounty, malware, all, essential")
-                    help_table.add_row("/model <id>", "Switch LLM model dynamically")
+                    help_table.add_row("/model <id|local>", "Switch or configure Cloud API / Local AirLLM models")
                     help_table.add_row("/tools", "List active HexStrike MCP tools")
                     help_table.add_row("/clear", "Reset conversation context")
                     help_table.add_row("/key", "Change or update API Key")
