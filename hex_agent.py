@@ -313,6 +313,139 @@ def display_tools_list(tools_mgr: HexStrikeToolsManager, mode: str):
         table.add_row(fn["name"], desc)
     console.print(table)
 
+# sabhi slash commands ki detailed information aur manual guide
+COMMANDS_HELP = {
+    "/setup": {
+        "syntax": "/setup",
+        "title": "Hardware Audit & Setup Wizard",
+        "description": "System hardware specs check karta hai (RAM, CPU, GPU, Disk) aur poochta hai ki Cloud API (OpenRouter, OpenAI, Claude, Gemini, Custom) use karni hai ya Local Uncensored AirLLM. Local models ko check karke download aur configure karta hai.",
+        "usage": [
+            "/setup  -> Run the complete initial setup wizard and switch engine"
+        ]
+    },
+    "/model": {
+        "syntax": "/model <id | local | api>",
+        "title": "LLM Engine & Model Management",
+        "description": "Cloud AI models switch karta hai, ya Local Uncensored LLMs (AirLLM engine) setup, download aur switch karta hai. Bina kisi argument ke interactive menu open hota hai.",
+        "usage": [
+            "/model                     -> Open interactive model selector menu",
+            "/model local               -> Directly launch Local Uncensored LLM setup & download",
+            "/model api                 -> Reconfigure Cloud API Provider & API Key",
+            "/model <model_alias>       -> Switch cloud model (e.g. /model deepseek, /model claude, /model gpt-4o, /model llama)",
+            "/model <local_folder_name> -> Directly switch to an installed local model from models/ directory"
+        ]
+    },
+    "/mode": {
+        "syntax": "/mode <bugbounty | malware | essential | all>",
+        "title": "HexStrike Tool Profile Switcher",
+        "description": "Agent ke active security tools aur capability profile ko dynamically switch karta hai. Har mode specific offensive security domain ke liye optimize kiya gaya hai.",
+        "usage": [
+            "/mode bugbounty  -> Web security, recon, crawling, injection, API testing tools",
+            "/mode malware    -> Reverse engineering, binary analysis, memory forensics, disassembly",
+            "/mode essential  -> Lightweight reconnaissance aur quick vulnerability scanning",
+            "/mode all        -> All 150+ HexStrike MCP tools loaded simultaneously"
+        ]
+    },
+    "/tools": {
+        "syntax": "/tools",
+        "title": "Active Tools Inspector",
+        "description": "Current active mode me jitne bhi HexStrike MCP tools loaded hain un sabki poori list aur descriptions terminal par table ke roop me dikhata hai.",
+        "usage": [
+            "/tools  -> List all active tools loaded for the current operation mode"
+        ]
+    },
+    "/key": {
+        "syntax": "/key",
+        "title": "Update API Key",
+        "description": "Active Cloud API Provider (OpenRouter, OpenAI, Anthropic, Gemini, ya Custom) ke liye API Key ko bina program restart kiye live update karta hai.",
+        "usage": [
+            "/key  -> Prompts for new API key and instantly re-initializes client"
+        ]
+    },
+    "/clear": {
+        "syntax": "/clear",
+        "title": "Reset Conversation Context",
+        "description": "Current conversation history aur memory context ko clear karta hai. Naya target ya naya security objective shuru karne ke liye best hai.",
+        "usage": [
+            "/clear  -> Wipes active chat history and resets context window"
+        ]
+    },
+    "/help": {
+        "syntax": "/help [command_name]",
+        "title": "Command Reference & Detailed Manual",
+        "description": "RAVAN ke sabhi slash commands ki complete detail, parameters, capabilities aur usage examples display karta hai.",
+        "usage": [
+            "/help          -> Show detailed table of all available commands",
+            "/help model    -> Show deep-dive explanation and examples for /model",
+            "/help mode     -> Show deep-dive explanation and examples for /mode"
+        ]
+    },
+    "/exit": {
+        "syntax": "/exit (or /quit)",
+        "title": "Exit RAVAN Agent",
+        "description": "Current RAVAN terminal session ko safely terminate karke close karta hai.",
+        "usage": [
+            "/exit  -> Exit and return to system shell"
+        ]
+    }
+}
+
+# slash commands ki detailed information terminal par render karta hai
+def display_command_help(target_cmd: Optional[str] = None):
+    # agar user ne kisi specific command ki detail mangi hai
+    if target_cmd:
+        norm_cmd = target_cmd.strip().lower()
+        if not norm_cmd.startswith("/"):
+            norm_cmd = "/" + norm_cmd
+
+        info = COMMANDS_HELP.get(norm_cmd)
+        if info:
+            content_text = Text()
+            content_text.append(f"Command: {norm_cmd}\n", style="bold red")
+            content_text.append(f"Title: {info['title']}\n\n", style="bold yellow")
+            content_text.append(f"Syntax: {info['syntax']}\n\n", style="bold cyan")
+            content_text.append(f"Description:\n{info['description']}\n\n", style="white")
+            content_text.append("Usage Examples:\n", style="bold green")
+            for ex in info["usage"]:
+                content_text.append(f"  • {ex}\n", style="dim green")
+
+            panel = Panel(
+                content_text,
+                title=f"[bold red]COMMAND MANUAL // {norm_cmd}[/bold red]",
+                border_style="red",
+                padding=(1, 2)
+            )
+            console.print(panel)
+            console.print()
+            return
+        else:
+            console.print(f"[yellow][!] Command '{target_cmd}' not recognized. Showing full manual below:[/yellow]\n")
+
+    # poori detailed table render kar rahe hain
+    help_table = Table(
+        title="RAVAN SLASH COMMANDS // OPERATIONAL MANUAL",
+        border_style="red",
+        header_style="bold red",
+        show_lines=True,
+        padding=(0, 1)
+    )
+    help_table.add_column("Command", style="bold cyan", no_wrap=True)
+    help_table.add_column("Syntax", style="yellow")
+    help_table.add_column("Description", style="white")
+    help_table.add_column("Usage Example", style="dim green")
+
+    for cmd_key, data in COMMANDS_HELP.items():
+        ex = data["usage"][0].split("->")[0].strip() if data["usage"] else cmd_key
+        help_table.add_row(
+            cmd_key,
+            data["syntax"],
+            data["description"],
+            ex
+        )
+
+    console.print(help_table)
+    console.print("[dim]Tip: Type '[bold cyan]/help <command>[/bold cyan]' (e.g. [yellow]/help model[/yellow], [yellow]/help mode[/yellow]) for deep-dive details and usage examples.[/dim]\n")
+
 # ravan ka main function jahan pura interactive loop aur auto execution chalta hai
 def main():
     print_banner()
@@ -484,17 +617,9 @@ def main():
                         console.print("[bold green][+] API Key updated![/bold green]\n")
                     continue
                 elif cmd in ["/help", "/?"]:
-                    help_table = Table(title="RAVAN Slash Commands", border_style="red")
-                    help_table.add_column("Command", style="bold cyan")
-                    help_table.add_column("Description", style="dim white")
-                    help_table.add_row("/setup", "Run setup wizard (Cloud API vs Local Uncensored LLM)")
-                    help_table.add_row("/mode <name>", "Switch tool profile: bugbounty, malware, all, essential")
-                    help_table.add_row("/model <id|local>", "Switch or configure Cloud API / Local AirLLM models")
-                    help_table.add_row("/tools", "List active HexStrike MCP tools")
-                    help_table.add_row("/clear", "Reset conversation context")
-                    help_table.add_row("/key", "Change or update API Key")
-                    help_table.add_row("/exit", "Exit RAVAN agent")
-                    console.print(help_table)
+                    # target command argument check kar rahe hain jaise /help model ya /help mode
+                    target_cmd = cmd_parts[1].strip() if len(cmd_parts) > 1 else None
+                    display_command_help(target_cmd)
                     continue
                 else:
                     console.print("[yellow]Unknown command. Type /help to see all commands.[/yellow]\n")

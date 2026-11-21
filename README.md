@@ -184,7 +184,7 @@ Control operational modes and models directly from the interactive prompt:
 | `/tools` | List all active HexStrike MCP tools loaded in the current mode |
 | `/key` | Update or change API Key |
 | `/clear` | Clear the current conversation context |
-| `/help` | Display command help sheet |
+| `/help [cmd]` | Display detailed operational manual or deep-dive help for a specific command |
 | `/exit` | Exit RAVAN agent |
 
 ---
