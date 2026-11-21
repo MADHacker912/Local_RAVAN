@@ -166,7 +166,8 @@ def print_banner():
 def display_dashboard(model: str, mode: str, tools_count: int, server_url: str, config: dict):
     provider_type = config.get("PROVIDER_TYPE", "api")
     if provider_type == "local":
-        provider_badge = f"[bold magenta]LOCAL AIRLLM ({config.get('LOCAL_BACKEND', 'airllm').upper()})[/bold magenta]"
+        backend = config.get("LOCAL_BACKEND", "ollama").upper()
+        provider_badge = f"[bold magenta]LOCAL LLM ({backend})[/bold magenta]"
     else:
         provider_name = config.get("API_PROVIDER", "openrouter").upper()
         provider_badge = f"[bold cyan]CLOUD API ({provider_name})[/bold cyan]"
@@ -194,18 +195,28 @@ def setup_client(config: dict) -> Tuple[Any, str]:
 
     # agar user ne local llm configure kiya hai
     if provider_type == "local":
-        model_path = config.get("LOCAL_MODEL_PATH", "")
         model_name = config.get("LOCAL_MODEL_NAME", "Local Uncensored LLM")
         backend = config.get("LOCAL_BACKEND", "airllm")
 
-        if not model_path or not Path(model_path).exists():
-            console.print(f"[yellow][!] Local model directory not found at: {model_path}[/yellow]")
-            console.print("[dim]Launching Setup Wizard to select or download a model...[/dim]\n")
-            config = run_setup_wizard(force=True)
-            return setup_client(config)
+        # agar backend ollama hai toh direct openai client se local endpoint connect karte hain
+        if backend == "ollama":
+            ollama_url = config.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
+            client = OpenAI(
+                base_url=ollama_url,
+                api_key="ollama"
+            )
+            return client, model_name
+        else:
+            # airllm layer by layer memory offloading engine
+            model_path = config.get("LOCAL_MODEL_PATH", "")
+            if not model_path or not Path(model_path).exists():
+                console.print(f"[yellow][!] Local model directory not found at: {model_path}[/yellow]")
+                console.print("[dim]Launching Setup Wizard to select or download a model...[/dim]\n")
+                config = run_setup_wizard(force=True)
+                return setup_client(config)
 
-        client = LocalLLMClient(model_path=model_path, backend=backend)
-        return client, model_name
+            client = LocalLLMClient(model_path=model_path, backend=backend)
+            return client, model_name
 
     # cloud api configure kar rahe hain
     api_key = config.get("API_KEY") or config.get("OPENROUTER_API_KEY", "")
@@ -318,7 +329,7 @@ COMMANDS_HELP = {
     "/setup": {
         "syntax": "/setup",
         "title": "Hardware Audit & Setup Wizard",
-        "description": "System hardware specs check karta hai (RAM, CPU, GPU, Disk) aur poochta hai ki Cloud API (OpenRouter, OpenAI, Claude, Gemini, Custom) use karni hai ya Local Uncensored AirLLM. Local models ko check karke download aur configure karta hai.",
+        "description": "Performs system hardware resource audit (RAM, CPU, GPU, Disk) and configures Cloud AI APIs (OpenRouter, OpenAI, Claude, Gemini, Custom) or Local Uncensored LLMs (Ollama / AirLLM).",
         "usage": [
             "/setup  -> Run the complete initial setup wizard and switch engine"
         ]
@@ -326,30 +337,30 @@ COMMANDS_HELP = {
     "/model": {
         "syntax": "/model <id | local | api>",
         "title": "LLM Engine & Model Management",
-        "description": "Cloud AI models switch karta hai, ya Local Uncensored LLMs (AirLLM engine) setup, download aur switch karta hai. Bina kisi argument ke interactive menu open hota hai.",
+        "description": "Dynamically switches between Cloud AI models or Local Uncensored LLMs (Ollama / AirLLM). Running without arguments opens an interactive model selector.",
         "usage": [
             "/model                     -> Open interactive model selector menu",
-            "/model local               -> Directly launch Local Uncensored LLM setup & download",
+            "/model local               -> Directly launch Local Uncensored LLM setup & system model audit",
             "/model api                 -> Reconfigure Cloud API Provider & API Key",
             "/model <model_alias>       -> Switch cloud model (e.g. /model deepseek, /model claude, /model gpt-4o, /model llama)",
-            "/model <local_folder_name> -> Directly switch to an installed local model from models/ directory"
+            "/model <local_model_name>  -> Directly switch to an installed local model (e.g. /model obito-dolphin:latest)"
         ]
     },
     "/mode": {
         "syntax": "/mode <bugbounty | malware | essential | all>",
         "title": "HexStrike Tool Profile Switcher",
-        "description": "Agent ke active security tools aur capability profile ko dynamically switch karta hai. Har mode specific offensive security domain ke liye optimize kiya gaya hai.",
+        "description": "Dynamically switches the agent's active security tools and capability profile for targeted offensive operations.",
         "usage": [
             "/mode bugbounty  -> Web security, recon, crawling, injection, API testing tools",
             "/mode malware    -> Reverse engineering, binary analysis, memory forensics, disassembly",
-            "/mode essential  -> Lightweight reconnaissance aur quick vulnerability scanning",
+            "/mode essential  -> Lightweight reconnaissance and fast vulnerability triage",
             "/mode all        -> All 150+ HexStrike MCP tools loaded simultaneously"
         ]
     },
     "/tools": {
         "syntax": "/tools",
         "title": "Active Tools Inspector",
-        "description": "Current active mode me jitne bhi HexStrike MCP tools loaded hain un sabki poori list aur descriptions terminal par table ke roop me dikhata hai.",
+        "description": "Displays all active HexStrike MCP tools and their descriptions loaded in the current operational mode.",
         "usage": [
             "/tools  -> List all active tools loaded for the current operation mode"
         ]
@@ -357,7 +368,7 @@ COMMANDS_HELP = {
     "/key": {
         "syntax": "/key",
         "title": "Update API Key",
-        "description": "Active Cloud API Provider (OpenRouter, OpenAI, Anthropic, Gemini, ya Custom) ke liye API Key ko bina program restart kiye live update karta hai.",
+        "description": "Updates or changes the active Cloud API Key on the fly without restarting the agent session.",
         "usage": [
             "/key  -> Prompts for new API key and instantly re-initializes client"
         ]
@@ -365,7 +376,7 @@ COMMANDS_HELP = {
     "/clear": {
         "syntax": "/clear",
         "title": "Reset Conversation Context",
-        "description": "Current conversation history aur memory context ko clear karta hai. Naya target ya naya security objective shuru karne ke liye best hai.",
+        "description": "Clears active conversation history and resets memory context. Ideal before auditing a new target.",
         "usage": [
             "/clear  -> Wipes active chat history and resets context window"
         ]
@@ -373,9 +384,9 @@ COMMANDS_HELP = {
     "/help": {
         "syntax": "/help [command_name]",
         "title": "Command Reference & Detailed Manual",
-        "description": "RAVAN ke sabhi slash commands ki complete detail, parameters, capabilities aur usage examples display karta hai.",
+        "description": "Displays the complete operational manual for all RAVAN slash commands or deep-dive details for a specific command.",
         "usage": [
-            "/help          -> Show detailed table of all available commands",
+            "/help          -> Show detailed manual table of all available commands",
             "/help model    -> Show deep-dive explanation and examples for /model",
             "/help mode     -> Show deep-dive explanation and examples for /mode"
         ]
@@ -383,7 +394,7 @@ COMMANDS_HELP = {
     "/exit": {
         "syntax": "/exit (or /quit)",
         "title": "Exit RAVAN Agent",
-        "description": "Current RAVAN terminal session ko safely terminate karke close karta hai.",
+        "description": "Safely terminates and exits the active RAVAN terminal session.",
         "usage": [
             "/exit  -> Exit and return to system shell"
         ]
@@ -535,11 +546,18 @@ def main():
 
                         if matched_local:
                             config["PROVIDER_TYPE"] = "local"
+                            config["LOCAL_BACKEND"] = matched_local["backend"]
                             config["LOCAL_MODEL_NAME"] = matched_local["name"]
-                            config["LOCAL_MODEL_PATH"] = matched_local["path"]
+                            if matched_local["backend"] == "ollama":
+                                config["OLLAMA_BASE_URL"] = "http://127.0.0.1:11434/v1"
+                                config["API_BASE_URL"] = "http://127.0.0.1:11434/v1"
+                                config["LOCAL_MODEL_PATH"] = "ollama"
+                            else:
+                                config["LOCAL_MODEL_PATH"] = matched_local["path"]
+                            config["DEFAULT_MODEL"] = matched_local["name"]
                             save_config(config)
                             client, current_model = setup_client(config)
-                            console.print(f"[bold green][+] Switched to Local Model: {current_model}[/bold green]\n")
+                            console.print(f"[bold green][+] Switched to Local Model: {current_model} ({matched_local['backend'].upper()})[/bold green]\n")
                         else:
                             # cloud model id ya alias select kar rahe hain
                             config["PROVIDER_TYPE"] = "api"
@@ -557,9 +575,9 @@ def main():
                         console.print(f"[bold cyan]Current Engine:[/bold cyan] [bold yellow]{provider_type.upper()}[/bold yellow] | [bold cyan]Active Model:[/bold cyan] [bold yellow]{current_model}[/bold yellow]")
                         console.print("[dim]Select an option to switch or configure models:[/dim]\n")
                         console.print("[bold yellow][1][/bold yellow] Switch Cloud Model [dim](deepseek, claude, gpt-4o, llama, gemini, etc.)[/dim]")
-                        console.print("[bold yellow][2][/bold yellow] Setup / Download Local Uncensored LLM [dim](AirLLM Engine)[/dim]")
+                        console.print("[bold yellow][2][/bold yellow] Setup / Download Local Uncensored LLM [dim](AirLLM / Ollama Engine)[/dim]")
                         if existing:
-                            console.print(f"[bold yellow][3][/bold yellow] Pick from Installed Local Models [dim]({len(existing)} found in models/)[/dim]")
+                            console.print(f"[bold yellow][3][/bold yellow] Pick from Detected Local Models on System [dim]({len(existing)} found)[/dim]")
                             console.print("[bold yellow][4][/bold yellow] Reconfigure Cloud API Provider & Key")
                         else:
                             console.print("[bold yellow][3][/bold yellow] Reconfigure Cloud API Provider & Key")
@@ -582,20 +600,27 @@ def main():
                             save_config(config)
                             console.print(f"[bold green][+] Engine switched to Local Model: {current_model}[/bold green]\n")
                         elif choice == "3" and existing:
-                            console.print("\n[bold cyan]Installed Local Models in models/:[/bold cyan]")
+                            console.print("\n[bold cyan]Detected Local Models on System:[/bold cyan]")
                             for i, lm in enumerate(existing, 1):
-                                console.print(f"  [[bold yellow]{i}[/bold yellow]] {lm['name']} [dim]({lm['path']})[/dim]")
+                                console.print(f"  [[bold yellow]{i}[/bold yellow]] {lm['name']} [magenta]({lm['backend'].upper()} - {lm['source']})[/magenta] [green]{lm['size']}[/green]")
                             pick = console.input(f"[bold cyan]Select model [1-{len(existing)}]: [/bold cyan]").strip()
                             try:
                                 pick_idx = int(pick) - 1
                                 if 0 <= pick_idx < len(existing):
                                     sel_m = existing[pick_idx]
                                     config["PROVIDER_TYPE"] = "local"
+                                    config["LOCAL_BACKEND"] = sel_m["backend"]
                                     config["LOCAL_MODEL_NAME"] = sel_m["name"]
-                                    config["LOCAL_MODEL_PATH"] = sel_m["path"]
+                                    if sel_m["backend"] == "ollama":
+                                        config["OLLAMA_BASE_URL"] = "http://127.0.0.1:11434/v1"
+                                        config["API_BASE_URL"] = "http://127.0.0.1:11434/v1"
+                                        config["LOCAL_MODEL_PATH"] = "ollama"
+                                    else:
+                                        config["LOCAL_MODEL_PATH"] = sel_m["path"]
+                                    config["DEFAULT_MODEL"] = sel_m["name"]
                                     save_config(config)
                                     client, current_model = setup_client(config)
-                                    console.print(f"[bold green][+] Switched to Local Model: {current_model}[/bold green]\n")
+                                    console.print(f"[bold green][+] Switched to Local Model: {current_model} ({sel_m['backend'].upper()})[/bold green]\n")
                             except ValueError:
                                 console.print("[yellow]Invalid selection. Keeping current model.[/yellow]\n")
                         elif (choice == "3" and not existing) or (choice == "4" and existing):
