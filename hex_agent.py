@@ -8,6 +8,7 @@ import os
 import time
 import json
 import re
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 import readline
@@ -26,7 +27,7 @@ from openai import OpenAI
 from config import load_config, save_config
 from tools_manager import HexStrikeToolsManager
 from setup_wizard import run_setup_wizard, get_system_specs, scan_local_models, setup_local_llm, setup_api_provider
-from local_llm_engine import LocalLLMClient
+from local_llm_engine import LocalLLMClient, parse_tool_calls_from_text
 
 # terminal output aur styling ke liye rich console ka object setup kar rahe hain
 console = Console()
@@ -162,6 +163,60 @@ MODELS_DIR = Path("/home/obito/hex-cyber-agent/models")
 def print_banner():
     console.print(BANNER)
 
+# active model ke tool calling support ko check karta hai
+def check_model_supports_native_tools(config: dict, model_name: str) -> bool:
+    provider_type = config.get("PROVIDER_TYPE", "api")
+    if provider_type == "api":
+        return True
+
+    backend = config.get("LOCAL_BACKEND", "airllm")
+    if backend == "ollama":
+        try:
+            base_url = config.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
+            host_url = base_url.replace("/v1", "")
+            req_data = json.dumps({"name": model_name}).encode()
+            req = urllib.request.Request(f"{host_url}/api/show", data=req_data, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
+                data = json.loads(resp.read().decode())
+                caps = data.get("capabilities", [])
+                return "tools" in caps
+        except Exception:
+            return False
+
+    return False
+
+# model ki capability ke mutabiq dynamic system prompt banata hai
+def get_system_prompt_for_mode(mode: str, native_tools: bool, tools_mgr: HexStrikeToolsManager) -> str:
+    if native_tools:
+        return SYSTEM_PROMPT
+
+    tools = tools_mgr.get_openai_tools(mode=mode, max_tools=50) if tools_mgr and tools_mgr.available else []
+    tools_doc = ""
+    if tools:
+        tools_doc = "\n\nAvailable Offensive Security Tools:\n"
+        for t in tools:
+            fn = t.get("function", {})
+            name = fn.get("name", "")
+            desc = fn.get("description", "").split("\n")[0][:70]
+            tools_doc += f"- {name}: {desc}\n"
+
+    prompt_with_tools = (
+        f"{SYSTEM_PROMPT}\n"
+        f"{tools_doc}\n"
+        "Autonomous Tool Execution Protocol:\n"
+        "When performing security assessments, scanning, recon, or exploitation, execute tools autonomously.\n"
+        "To run a tool, you MUST output a JSON markdown block with the tool name and arguments:\n"
+        "```json\n"
+        "{\n"
+        '  "tool": "<tool_name>",\n'
+        '  "parameters": { ... }\n'
+        "}\n"
+        "```\n"
+        "Do not ask the user for confirmation. Execute the required tool directly.\n"
+        "If no tool needs to be executed (such as conversational greetings or answering conceptual questions), reply normally in standard text.\n"
+    )
+    return prompt_with_tools
+
 # terminal screen par live system status aur configuration dashboard dikhata hai
 def display_dashboard(model: str, mode: str, tools_count: int, server_url: str, config: dict):
     provider_type = config.get("PROVIDER_TYPE", "api")
@@ -172,9 +227,13 @@ def display_dashboard(model: str, mode: str, tools_count: int, server_url: str, 
         provider_name = config.get("API_PROVIDER", "openrouter").upper()
         provider_badge = f"[bold cyan]CLOUD API ({provider_name})[/bold cyan]"
 
+    native_tools = check_model_supports_native_tools(config, model)
+    tool_badge = "[bold green]Native Function Calling[/bold green]" if native_tools else "[bold yellow]Prompt ReAct Emulation[/bold yellow]"
+
     info_table = Table(box=None, show_header=False, padding=(0, 2))
     info_table.add_row("[bold cyan]Provider Mode:[/bold cyan]", provider_badge)
     info_table.add_row("[bold cyan]AI Engine / Model:[/bold cyan]", f"[bold yellow]{model}[/bold yellow]")
+    info_table.add_row("[bold cyan]Tool Calling Mode:[/bold cyan]", tool_badge)
     info_table.add_row("[bold cyan]Operation Mode:[/bold cyan]", f"[bold magenta]{mode.upper()}[/bold magenta]")
     info_table.add_row("[bold cyan]HexStrike MCP:[/bold cyan]", f"[bold green]{tools_count} Tools Loaded[/bold green] ({server_url})")
     info_table.add_row("[bold cyan]Reports Directory:[/bold cyan]", f"[dim]{REPORTS_DIR}[/dim]")
@@ -477,9 +536,12 @@ def main():
     total_tools = len(tools_mgr.get_tool_names()) if tools_mgr.available else 0
     display_dashboard(current_model, current_mode, total_tools, server_url, config)
 
+    # model ki tool calling capability audit kar rahe hain
+    native_tools_supported = check_model_supports_native_tools(config, current_model)
+
     # conversation messages ki list initialize kar rahe hain
     messages: List[Dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT}
+        {"role": "system", "content": get_system_prompt_for_mode(current_mode, native_tools_supported, tools_mgr)}
     ]
 
     while True:
@@ -500,12 +562,15 @@ def main():
                     console.print("[bold red][*] Exiting RAVAN. Goodbye![/bold red]")
                     break
                 elif cmd == "/clear":
-                    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+                    native_tools_supported = check_model_supports_native_tools(config, current_model)
+                    messages = [{"role": "system", "content": get_system_prompt_for_mode(current_mode, native_tools_supported, tools_mgr)}]
                     console.print("[bold green][+] Chat context cleared![/bold green]\n")
                     continue
                 elif cmd == "/setup":
                     config = run_setup_wizard(force=True)
                     client, current_model = setup_client(config)
+                    native_tools_supported = check_model_supports_native_tools(config, current_model)
+                    messages = [{"role": "system", "content": get_system_prompt_for_mode(current_mode, native_tools_supported, tools_mgr)}]
                     display_dashboard(current_model, current_mode, total_tools, server_url, config)
                     continue
                 elif cmd == "/mode":
@@ -513,6 +578,7 @@ def main():
                         current_mode = cmd_parts[1].lower()
                         config["DEFAULT_MODE"] = current_mode
                         save_config(config)
+                        messages[0]["content"] = get_system_prompt_for_mode(current_mode, native_tools_supported, tools_mgr)
                         console.print(f"[bold green][+] Mode switched to: {current_mode.upper()}[/bold green]\n")
                     else:
                         console.print("[yellow]Usage: /mode <bugbounty | malware | all | essential>[/yellow]\n")
@@ -666,14 +732,28 @@ def main():
                             "model": current_model,
                             "messages": messages,
                         }
-                        if active_tools and len(active_tools) > 0:
+                        if active_tools and len(active_tools) > 0 and native_tools_supported:
                             kwargs["tools"] = active_tools
                             kwargs["tool_choice"] = "auto"
 
                         response = client.chat.completions.create(**kwargs)
                     except Exception as err:
-                        console.print(f"[bold red][x] AI Engine Error: {str(err)}[/bold red]")
-                        break
+                        err_str = str(err)
+                        # agar model native tools support nahi karta toh fallback prompt-based mode me switch karte hain
+                        if "does not support tools" in err_str.lower():
+                            native_tools_supported = False
+                            kwargs.pop("tools", None)
+                            kwargs.pop("tool_choice", None)
+                            if messages and messages[0]["role"] == "system":
+                                messages[0]["content"] = get_system_prompt_for_mode(current_mode, False, tools_mgr)
+                            try:
+                                response = client.chat.completions.create(**kwargs)
+                            except Exception as retry_err:
+                                console.print(f"[bold red][x] AI Engine Error: {str(retry_err)}[/bold red]")
+                                break
+                        else:
+                            console.print(f"[bold red][x] AI Engine Error: {err_str}[/bold red]")
+                            break
 
                 choice = response.choices[0]
                 msg = choice.message
@@ -681,9 +761,19 @@ def main():
                 # assistant ke response ko message list me add kar rahe hain
                 messages.append(msg.model_dump(exclude_unset=True))
 
+                tool_calls = getattr(msg, "tool_calls", None) or []
+
+                # agar model ne native tool_calls nahi diya lekin prompt me json tool call likha hai
+                if not tool_calls and msg.content and active_tools:
+                    cleaned_content, extracted_calls = parse_tool_calls_from_text(msg.content, active_tools)
+                    if extracted_calls:
+                        tool_calls = extracted_calls
+                        msg.content = cleaned_content
+                        messages[-1]["content"] = cleaned_content
+
                 # agar model ne kisi security tool ko call karne ko bola hai
-                if msg.tool_calls:
-                    for tool_call in msg.tool_calls:
+                if tool_calls:
+                    for tool_call in tool_calls:
                         func_name = tool_call.function.name
                         try:
                             func_args = json.loads(tool_call.function.arguments) if isinstance(tool_call.function.arguments, str) else tool_call.function.arguments
@@ -716,13 +806,20 @@ def main():
                         ))
 
                         # tool ka result wapas model ko bhej rahe hain aage ke analysis ke liye
-                        safe_content = result_str if len(result_str) < 8000 else result_str[:8000] + "\n\n[Warning: Output truncated to 8000 chars]"
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "name": func_name,
-                            "content": safe_content
-                        })
+                        if native_tools_supported:
+                            safe_content = result_str if len(result_str) < 8000 else result_str[:8000] + "\n\n[Warning: Output truncated to 8000 chars]"
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "name": func_name,
+                                "content": safe_content
+                            })
+                        else:
+                            safe_content = result_str if len(result_str) < 4000 else result_str[:4000] + "\n\n[Warning: Output truncated to 4000 chars]"
+                            messages.append({
+                                "role": "user",
+                                "content": f"[Tool Execution Result for '{func_name}']:\n{safe_content}\n\nContinue your offensive assessment autonomously."
+                            })
                     # loop wapas shuru ho raha hai taaki model tool ka output dekh kar aage badh sake
                     continue
                 else:
